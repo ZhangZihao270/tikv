@@ -728,7 +728,7 @@ where
             self.core.config.storage.txn_status_cache_capacity,
         ));
 
-        let storage = Storage::<_, _, F>::from_engine(
+        let mut storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.core.config.storage,
             storage_read_pool_handle,
@@ -748,6 +748,15 @@ where
             txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+        // Inject RegionReadProgressRegistry for weak-read applied-index gating.
+        storage.set_region_read_progress(
+            engines
+                .store_meta
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone(),
+        );
         cfg_controller.register(
             tikv::config::Module::Storage,
             Box::new(StorageConfigManger::new(

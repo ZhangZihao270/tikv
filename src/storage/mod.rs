@@ -90,7 +90,10 @@ use kvproto::{
 };
 use pd_client::FeatureGate;
 use protobuf::Message;
-use raftstore::store::{ReadStats, TxnExt, WriteStats, util::build_key_range};
+use raftstore::store::{
+    ReadStats, TxnExt, WriteStats,
+    util::{RegionReadProgressRegistry, build_key_range},
+};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{
@@ -222,6 +225,9 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
+    /// Registry for checking per-region applied_index (used by weak-read gating).
+    pub(crate) region_read_progress: Option<RegionReadProgressRegistry>,
+
     _phantom: PhantomData<F>,
 }
 
@@ -246,6 +252,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: self.quota_limiter.clone(),
             resource_manager: self.resource_manager.clone(),
+            region_read_progress: self.region_read_progress.clone(),
             _phantom: PhantomData,
         }
     }
@@ -320,6 +327,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             resource_tag_factory,
             quota_limiter,
             resource_manager,
+            region_read_progress: None,
             _phantom: PhantomData,
         })
     }
@@ -335,6 +343,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     pub fn get_concurrency_manager(&self) -> ConcurrencyManager {
         self.concurrency_manager.clone()
+    }
+
+    pub fn set_region_read_progress(&mut self, rrp: RegionReadProgressRegistry) {
+        self.region_read_progress = Some(rrp);
     }
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
