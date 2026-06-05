@@ -44,6 +44,7 @@ make_auto_flush_static_metric! {
         raw_scan,
         raw_batch_scan,
         raw_put,
+        raw_put_weak,
         raw_batch_put,
         raw_delete,
         raw_delete_range,

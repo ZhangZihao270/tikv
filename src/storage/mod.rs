@@ -2481,6 +2481,72 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         })
     }
 
+    /// Like [`raw_put`] but responds as soon as the entry is *proposed* to
+    /// Raft (early ack). The write still goes through commit+apply normally.
+    /// Returns `()` through the callback on successful propose.
+    pub fn raw_put_weak(
+        &self,
+        mut ctx: Context,
+        cf: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_put;
+        let api_version = self.api_version;
+
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
+
+        let deadline = Self::get_deadline(&ctx);
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let provider = self.causal_ts_provider.clone();
+        let engine = self.engine.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
+
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        self.sched_raw_command(metadata, priority, CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
+                return callback(Err(e));
+            }
+
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            let ts = get_causal_ts(&provider).await;
+            if let Err(e) = ts {
+                return callback(Err(e));
+            }
+            let raw_value = RawValue {
+                user_value: value,
+                expire_ts: None,
+                is_delete: false,
+            };
+            let m = Modify::Put(
+                cf,
+                F::encode_raw_key_owned(key, ts.unwrap()),
+                F::encode_raw_value_owned(raw_value),
+            );
+
+            let mut batch = WriteData::from_modifies(vec![m]);
+            batch.set_allowed_on_disk_almost_full();
+            // Early ack: resolve on Proposed, not on Finished/Applied.
+            let res = kv::write_proposed(&engine, &ctx, batch);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+        })
+    }
+
     fn check_ttl_valid(key_cnt: usize, ttls: &[u64]) -> Result<()> {
         if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {

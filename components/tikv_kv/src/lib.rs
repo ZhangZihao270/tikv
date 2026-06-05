@@ -793,6 +793,27 @@ pub fn write<E: Engine>(
     }
 }
 
+/// Like [`write`], but resolves as soon as the entry is *proposed* to the Raft
+/// group (before commit/apply). Used for weak/early-ack writes.
+pub fn write_proposed<E: Engine>(
+    engine: &E,
+    ctx: &Context,
+    batch: WriteData,
+) -> impl std::future::Future<Output = Option<Result<()>>> {
+    let mut res =
+        engine.async_write(ctx, batch, WriteEvent::EVENT_PROPOSED, None);
+    async move {
+        loop {
+            match res.next().await {
+                Some(WriteEvent::Proposed) => return Some(Ok(())),
+                Some(WriteEvent::Finished(res)) => return Some(res),
+                Some(_) => (),
+                None => return None,
+            }
+        }
+    }
+}
+
 /// Write modifications into a `BaseRocksEngine` instance.
 pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Result<()> {
     fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));

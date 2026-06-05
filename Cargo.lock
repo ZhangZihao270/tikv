@@ -4422,7 +4422,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f33f20c54524c6c62cde791f9b274fdf1044535a"
+source = "git+https://github.com/ZhangZihao270/kvproto?branch=master#2aecd5e3eadd5d60eb306238446cb8640998e32a"
 dependencies = [
  "bytes",
  "futures 0.3.15",
@@ -6026,7 +6026,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#ad13f3d90780f53aea2488c6a4b76c0d334bf136"
+source = "git+https://github.com/ZhangZihao270/raft-rs?branch=master#c0de270556c63277a112fbb3846092b89b09fe4f"
 dependencies = [
  "bytes",
  "fxhash",
@@ -6084,7 +6084,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#ad13f3d90780f53aea2488c6a4b76c0d334bf136"
+source = "git+https://github.com/ZhangZihao270/raft-rs?branch=master#c0de270556c63277a112fbb3846092b89b09fe4f"
 dependencies = [
  "bytes",
  "protobuf 2.8.0",

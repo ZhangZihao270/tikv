@@ -201,8 +201,8 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+raft = { git = "https://github.com/ZhangZihao270/raft-rs", branch = "master" }
+raft-proto = { git = "https://github.com/ZhangZihao270/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
@@ -222,12 +222,12 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+[patch.'https://github.com/pingcap/kvproto']
+kvproto = { git = "https://github.com/ZhangZihao270/kvproto", branch = "master" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
-# rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
+# rocksdb = { git = "https://github.com/ZhangZihao270/rust-rocksdb", branch = "master" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

@@ -449,6 +449,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     );
     handle_request!(raw_put, future_raw_put, RawPutRequest, RawPutResponse);
     handle_request!(
+        raw_put_weak,
+        future_raw_put_weak,
+        RawPutWeakRequest,
+        RawPutWeakResponse
+    );
+    handle_request!(
         raw_batch_put,
         future_raw_batch_put,
         RawBatchPutRequest,
@@ -2066,6 +2072,35 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         }
+        Ok(resp)
+    }
+}
+
+fn future_raw_put_weak<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: RawPutWeakRequest,
+) -> impl Future<Output = ServerResult<RawPutWeakResponse>> {
+    let (cb, f) = paired_future_callback();
+    let res = storage.raw_put_weak(
+        req.take_context(),
+        req.take_cf(),
+        req.take_key(),
+        req.take_value(),
+        cb,
+    );
+
+    async move {
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
+        let mut resp = RawPutWeakResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        // TODO: populate assigned_index once raftstore exposes it
         Ok(resp)
     }
 }
