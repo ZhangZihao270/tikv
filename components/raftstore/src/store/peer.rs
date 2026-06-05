@@ -4021,6 +4021,7 @@ where
                     // including `cmd_epoch_checker`, we can safely guarantee
                     // that this proposal will be committed if there is no abnormal leader transfer
                     // in the near future. Thus proposed callback can be called.
+                    cb.set_proposed_index(idx);
                     cb.invoke_proposed();
                 }
                 if is_urgent {

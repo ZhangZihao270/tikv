@@ -30,7 +30,10 @@ use std::{
     error,
     num::NonZeroU64,
     ptr, result,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -252,6 +255,10 @@ pub struct WriteData {
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
     pub avoid_batch: bool,
+    /// Side channel for weak-write proposed index. When set, the engine will
+    /// thread this Arc to the raftstore Callback so the assigned raft log
+    /// index is stored here (Release) before the Proposed event fires.
+    pub proposed_index_slot: Option<Arc<AtomicU64>>,
 }
 
 impl WriteData {
@@ -262,6 +269,7 @@ impl WriteData {
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
             avoid_batch: false,
+            proposed_index_slot: None,
         }
     }
 
@@ -807,6 +815,38 @@ pub fn write_proposed<E: Engine>(
             match res.next().await {
                 Some(WriteEvent::Proposed) => return Some(Ok(())),
                 Some(WriteEvent::Finished(res)) => return Some(res),
+                Some(_) => (),
+                None => return None,
+            }
+        }
+    }
+}
+
+/// Like [`write_proposed`], but also returns the raft log index assigned
+/// during proposal. Used by weak/early-ack writes that need to communicate
+/// the assigned index back to the client for causal ordering.
+///
+/// The caller must set `batch.proposed_index_slot` to an `Arc<AtomicU64>`
+/// before calling, and set `batch.avoid_batch = true` to ensure the index
+/// corresponds to this specific request.
+pub fn write_proposed_with_index<E: Engine>(
+    engine: &E,
+    ctx: &Context,
+    batch: WriteData,
+) -> impl std::future::Future<Output = Option<Result<u64>>> {
+    let index_slot = batch
+        .proposed_index_slot
+        .clone()
+        .expect("write_proposed_with_index requires proposed_index_slot");
+    let mut res = engine.async_write(ctx, batch, WriteEvent::EVENT_PROPOSED, None);
+    async move {
+        loop {
+            match res.next().await {
+                Some(WriteEvent::Proposed) => {
+                    let idx = index_slot.load(Ordering::Acquire);
+                    return Some(Ok(idx));
+                }
+                Some(WriteEvent::Finished(res)) => return Some(res.map(|_| 0)),
                 Some(_) => (),
                 None => return None,
             }

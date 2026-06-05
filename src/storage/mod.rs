@@ -2483,14 +2483,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Like [`raw_put`] but responds as soon as the entry is *proposed* to
     /// Raft (early ack). The write still goes through commit+apply normally.
-    /// Returns `()` through the callback on successful propose.
+    /// Returns the assigned raft log index through the callback.
     pub fn raw_put_weak(
         &self,
         mut ctx: Context,
         cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
-        callback: Callback<()>,
+        callback: Callback<u64>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
@@ -2536,8 +2536,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
+            // Avoid batching so the proposed index corresponds to this request.
+            batch.set_avoid_batch(true);
+            // Side channel for the assigned raft log index.
+            let index_slot = Arc::new(AtomicU64::new(0));
+            batch.proposed_index_slot = Some(index_slot);
             // Early ack: resolve on Proposed, not on Finished/Applied.
-            let res = kv::write_proposed(&engine, &ctx, batch);
+            let res = kv::write_proposed_with_index(&engine, &ctx, batch);
             callback(
                 res.await
                     .unwrap_or_else(|| Err(box_err!("stale command")))

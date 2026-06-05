@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
 use std::{borrow::Cow, fmt, time::Duration};
@@ -139,6 +140,10 @@ pub enum Callback<S: Snapshot> {
         /// it's being applied, and it's guaranteed that the request will be
         /// successfully applied soon.
         committed_cb: Option<ExtCallback>,
+        /// Optional slot for the raft log index assigned during proposal.
+        /// Used by weak-write early-ack to communicate the assigned index
+        /// back to the caller (set in `Peer::propose`, read in raftkv).
+        proposed_index_slot: Option<std::sync::Arc<AtomicU64>>,
 
         trackers: SmallVec<[TimeTracker; 4]>,
     },
@@ -173,7 +178,20 @@ where
             cb,
             proposed_cb,
             committed_cb,
+            proposed_index_slot: None,
             trackers: smallvec![tracker],
+        }
+    }
+
+    /// Set the proposed_index_slot for weak-write callbacks that need the
+    /// assigned raft log index.
+    pub fn set_proposed_index_slot(&mut self, slot: std::sync::Arc<AtomicU64>) {
+        if let Callback::Write {
+            proposed_index_slot,
+            ..
+        } = self
+        {
+            *proposed_index_slot = Some(slot);
         }
     }
 
@@ -210,6 +228,18 @@ where
         };
         if let Some(cb) = proposed_cb.take() {
             cb();
+        }
+    }
+
+    /// Store the raft log index assigned during proposal into the side-channel
+    /// slot (if one was set). Must be called BEFORE `invoke_proposed()`.
+    pub fn set_proposed_index(&mut self, idx: u64) {
+        if let Callback::Write {
+            proposed_index_slot: Some(slot),
+            ..
+        } = self
+        {
+            slot.store(idx, Ordering::Release);
         }
     }
 

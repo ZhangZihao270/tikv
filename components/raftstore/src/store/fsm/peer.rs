@@ -619,6 +619,7 @@ where
                 }),
                 proposed_cb,
                 committed_cb,
+                proposed_index_slot: None,
                 trackers,
             };
             return Some((req, cb));

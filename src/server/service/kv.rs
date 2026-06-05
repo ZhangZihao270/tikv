@@ -2130,8 +2130,9 @@ fn future_raw_put_weak<E: Engine, L: LockManager, F: KvFormat>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
+        } else if let Ok(idx) = v {
+            resp.set_assigned_index(idx);
         }
-        // TODO: populate assigned_index once raftstore exposes it
         Ok(resp)
     }
 }

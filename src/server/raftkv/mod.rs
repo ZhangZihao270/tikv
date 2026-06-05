@@ -14,7 +14,7 @@ use std::{
     result,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
     },
     task::Poll,
     time::Duration,
@@ -288,6 +288,11 @@ struct WriteResCore {
 struct WriteResSub {
     notified_ev: u8,
     core: Arc<WriteResCore>,
+    /// Side channel for the raft log index assigned during proposal (weak writes).
+    /// Shared with raftstore Callback's `proposed_index_slot`. Written by
+    /// raftstore (Release) before the Proposed event flag, read here (Acquire)
+    /// after observing the event.
+    proposed_index: Option<Arc<AtomicU64>>,
 }
 
 unsafe impl Send for WriteResSub {}
@@ -341,6 +346,7 @@ impl WriteResFeed {
             WriteResSub {
                 notified_ev: 0,
                 core,
+                proposed_index: None,
             },
         )
     }
@@ -351,6 +357,7 @@ impl WriteResFeed {
             .store(WriteEvent::EVENT_PROPOSED, Ordering::Release);
         self.core.wake.wake();
     }
+
 
     fn notify_committed(&self) {
         self.core
@@ -581,7 +588,7 @@ where
 
         self.schedule_txn_extra(txn_extra);
 
-        let (tx, rx) = WriteResFeed::pair();
+        let (tx, mut rx) = WriteResFeed::pair();
         if res.is_ok() {
             let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
                 None
@@ -625,7 +632,12 @@ where
                 drop_on_applied_callback,
             );
 
-            let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+            let mut cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+            // Thread the proposed_index side channel to the raftstore Callback
+            // so the assigned raft log index is stored before Proposed fires.
+            if let Some(ref slot) = batch.proposed_index_slot {
+                cb.set_proposed_index_slot(slot.clone());
+            }
             let extra_opts = RaftCmdExtraOpts {
                 deadline: batch.deadline,
                 disk_full_opt: batch.disk_full_opt,
@@ -641,6 +653,9 @@ where
             // how the `applied_cb` does.
             tx.notify(res);
         }
+        // Thread the proposed_index slot to the subscriber so the consumer
+        // can read the index after receiving the Proposed event.
+        rx.proposed_index = batch.proposed_index_slot;
         rx.inspect(move |ev| {
             if let WriteEvent::Finished(Err(e)) = ev {
                 let status_kind = get_status_kind_from_engine_error(e);
