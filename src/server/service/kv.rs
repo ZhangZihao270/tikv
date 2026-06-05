@@ -2152,6 +2152,7 @@ fn future_raw_put_weak<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawPutWeakRequest,
 ) -> impl Future<Output = ServerResult<RawPutWeakResponse>> {
+    let region_id = req.get_context().get_region_id();
     let (cb, f) = paired_future_callback();
     let res = storage.raw_put_weak(
         req.take_context(),
@@ -2173,6 +2174,7 @@ fn future_raw_put_weak<E: Engine, L: LockManager, F: KvFormat>(
             resp.set_error(format!("{}", e));
         } else if let Ok(idx) = v {
             resp.set_assigned_index(idx);
+            resp.set_region_id(region_id);
         }
         Ok(resp)
     }
