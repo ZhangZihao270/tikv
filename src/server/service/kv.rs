@@ -435,6 +435,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     );
     handle_request!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
     handle_request!(
+        raw_get_weak,
+        future_raw_get_weak,
+        RawGetWeakRequest,
+        RawGetWeakResponse
+    );
+    handle_request!(
         raw_batch_get,
         future_raw_batch_get,
         RawBatchGetRequest,
@@ -2004,6 +2010,31 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
     async move {
         let v = v.await;
         let mut resp = RawGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some(val)) => resp.set_value(val),
+                Ok(None) => resp.set_not_found(true),
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_get_weak<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: RawGetWeakRequest,
+) -> impl Future<Output = ServerResult<RawGetWeakResponse>> {
+    let mut ctx = req.take_context();
+    // Enable stale read so the raftstore reads locally without ReadIndex.
+    ctx.set_stale_read(true);
+    let v = storage.raw_get(ctx, req.take_cf(), req.take_key());
+
+    async move {
+        let v = v.await;
+        let mut resp = RawGetWeakResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
