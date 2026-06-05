@@ -2029,44 +2029,52 @@ fn future_raw_get_weak<E: Engine, L: LockManager, F: KvFormat>(
 ) -> impl Future<Output = ServerResult<RawGetWeakResponse>> {
     let min_index = req.get_min_index();
     let region_id = req.get_context().get_region_id();
-    // Look up the region's read progress for applied-index gating (cheap Arc clone).
-    let progress = if min_index > 0 {
+
+    // Synchronous applied-index gating: wait until applied_index >= min_index
+    // before taking the snapshot. Uses std::thread::sleep because the grpcio
+    // executor is not a tokio runtime.
+    let gating_error = if min_index > 0 {
         storage
             .region_read_progress
             .as_ref()
             .and_then(|r| r.get(&region_id))
+            .and_then(|progress| {
+                let current = progress.get_core().applied_index();
+                if current >= min_index {
+                    return None;
+                }
+                // Brief spin-wait for applied_index to catch up (should be <1ms on single-node).
+                let deadline = std::time::Instant::now() + Duration::from_millis(500);
+                loop {
+                    std::thread::sleep(Duration::from_millis(1));
+                    let current = progress.get_core().applied_index();
+                    if current >= min_index {
+                        return None;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Some(format!(
+                            "weak read timed out: applied_index {} < min_index {}",
+                            current, min_index
+                        ));
+                    }
+                }
+            })
     } else {
         None
     };
-    let storage = storage.clone();
+
     let mut ctx = req.take_context();
     ctx.set_stale_read(true);
-    let cf = req.take_cf();
-    let key = req.take_key();
+    let v = storage.raw_get(ctx, req.take_cf(), req.take_key());
 
     async move {
-        // Applied-index gating: wait until the region has applied up to min_index
-        // so the local RocksDB snapshot includes all causally-dependent writes.
-        if let Some(ref progress) = progress {
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            loop {
-                let current = progress.get_core().applied_index();
-                if current >= min_index {
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    let mut resp = RawGetWeakResponse::default();
-                    resp.set_error(format!(
-                        "weak read timed out: applied_index {} < min_index {}",
-                        current, min_index
-                    ));
-                    return Ok(resp);
-                }
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
+        if let Some(err) = gating_error {
+            let mut resp = RawGetWeakResponse::default();
+            resp.set_error(err);
+            return Ok(resp);
         }
 
-        let v = storage.raw_get(ctx, cf, key).await;
+        let v = v.await;
         let mut resp = RawGetWeakResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
