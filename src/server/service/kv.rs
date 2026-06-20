@@ -42,6 +42,7 @@ use tikv_util::{
     mpsc::future::{BatchReceiver, Sender, WakePolicy, unbounded},
     sys::memory_usage_reaches_high_water,
     time::{Instant, nanos_to_secs},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 use tracker::{
@@ -2030,35 +2031,17 @@ fn future_raw_get_weak<E: Engine, L: LockManager, F: KvFormat>(
     let min_index = req.get_min_index();
     let region_id = req.get_context().get_region_id();
 
-    // Synchronous applied-index gating: wait until applied_index >= min_index
-    // before taking the snapshot. Uses std::thread::sleep because the grpcio
-    // executor is not a tokio runtime.
-    let gating_error = if min_index > 0 {
+    // Applied-index gate: hold the read until applied_index >= min_index so the
+    // weak read sees the client's prior weak writes (causal). Done ASYNC — we
+    // `.await` a global-timer delay between checks so the executor thread is
+    // YIELDED, not blocked. (The old version did std::thread::sleep here, which
+    // pinned a gRPC worker thread per gating read and exhausted the pool under
+    // concurrency -> seconds-long tail latency and throughput collapse.)
+    let gate_progress = if min_index > 0 {
         storage
             .region_read_progress
             .as_ref()
             .and_then(|r| r.get(&region_id))
-            .and_then(|progress| {
-                let current = progress.get_core().applied_index();
-                if current >= min_index {
-                    return None;
-                }
-                // Brief spin-wait for applied_index to catch up (should be <1ms on single-node).
-                let deadline = std::time::Instant::now() + Duration::from_millis(500);
-                loop {
-                    std::thread::sleep(Duration::from_millis(1));
-                    let current = progress.get_core().applied_index();
-                    if current >= min_index {
-                        return None;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Some(format!(
-                            "weak read timed out: applied_index {} < min_index {}",
-                            current, min_index
-                        ));
-                    }
-                }
-            })
     } else {
         None
     };
@@ -2068,6 +2051,29 @@ fn future_raw_get_weak<E: Engine, L: LockManager, F: KvFormat>(
     let v = storage.raw_get(ctx, req.take_cf(), req.take_key());
 
     async move {
+        let mut gating_error = None;
+        if let Some(progress) = gate_progress {
+            if progress.get_core().applied_index() < min_index {
+                let deadline = std::time::Instant::now() + Duration::from_millis(500);
+                loop {
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_millis(1))
+                        .compat()
+                        .await;
+                    let current = progress.get_core().applied_index();
+                    if current >= min_index {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        gating_error = Some(format!(
+                            "weak read timed out: applied_index {} < min_index {}",
+                            current, min_index
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
         if let Some(err) = gating_error {
             let mut resp = RawGetWeakResponse::default();
             resp.set_error(err);
